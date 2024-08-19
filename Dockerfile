@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
         unzip \
         wget \
         supervisor \
+        php-excimer \
         apache2 \
     && docker-php-ext-configure gd  \
     && docker-php-ext-install -j$(nproc) gd \

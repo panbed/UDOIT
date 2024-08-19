@@ -17,6 +17,16 @@ if (is_array($env = @include dirname(__DIR__).'/.env.local.php') && (!isset($env
     (new Dotenv(false))->loadEnv(dirname(__DIR__).'/.env');
 }
 
+
+\Sentry\init([
+    'dsn' => getenv('SENTRY_DSN'),
+    // Specify a fixed sample rate
+    'traces_sample_rate' => 0.05,
+    // Set a sampling rate for profiling - this is relative to traces_sample_rate
+    'profiles_sample_rate' => 0.05,
+    ]);
+
+
 $_SERVER += $_ENV;
 $_SERVER['APP_ENV'] = $_ENV['APP_ENV'] = ($_SERVER['APP_ENV'] ?? $_ENV['APP_ENV'] ?? null) ?: 'dev';
 $_SERVER['APP_DEBUG'] = $_SERVER['APP_DEBUG'] ?? $_ENV['APP_DEBUG'] ?? 'prod' !== $_SERVER['APP_ENV'];
