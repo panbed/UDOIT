@@ -102,13 +102,29 @@ export default function UfixitModal({
       return
     }
 
-    if (tempIssue.status) {
-      tempIssue.status = false
-      tempIssue.newHtml = Html.toString(Html.removeClass(tempIssue.sourceHtml, 'phpally-ignore'))
+    if (activeIssue.status) {
+      activeIssue.status = false
+      // activeIssue.newHtml = Html.toString(Html.removeClass(activeIssue.sourceHtml, 'phpally-ignore'))
+
+      const currentIgnoreAttribute = Html.getAttribute(activeIssue.sourceHtml, "data-udoit-ignore") || "";
+      const ignoreArray = currentIgnoreAttribute.split(" ").filter(id => id !== "" && id !== activeIssue.scanRuleId);
+      const newIgnoreAttribute = ignoreArray.length > 0 ? ignoreArray.join(" ") : "";
+
+      activeIssue.newHtml = Html.toString(Html.setAttribute(activeIssue.sourceHtml, "data-udoit-ignore", newIgnoreAttribute))
     }
     else {
-      tempIssue.status = 2
-      tempIssue.newHtml = Html.toString(Html.addClass(tempIssue.sourceHtml, 'phpally-ignore'))
+      activeIssue.status = 2
+      // activeIssue.newHtml = Html.toString(Html.addClass(activeIssue.sourceHtml, 'phpally-ignore'))
+
+
+      let newIgnoreAttribute = Html.getAttribute(activeIssue.sourceHtml, "data-udoit-ignore")
+      if (newIgnoreAttribute) {
+        newIgnoreAttribute = `${newIgnoreAttribute} ${activeIssue.scanRuleId}`
+      }
+      else {
+        newIgnoreAttribute = activeIssue.scanRuleId
+      }
+      activeIssue.newHtml = Html.toString(Html.setAttribute(activeIssue.sourceHtml, "data-udoit-ignore", newIgnoreAttribute))
     }
 
     let api = new Api(settings)
