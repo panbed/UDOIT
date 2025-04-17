@@ -648,11 +648,43 @@ export default function FixIssuesPage({
     let tempIssue = Object.assign({}, issue)
     if (tempIssue.status) {
       tempIssue.status = false
-      tempIssue.newHtml = Html.toString(Html.removeClass(tempIssue.sourceHtml, 'phpally-ignore'))
+
+      // removing the ignore attribute from the html
+      if (process.env.ACCESSIBILITY_CHECKER === 'equalaccess_lambda' || process.env.ACCESSIBILITY_CHECKER === 'equalaccess_local') {
+        // when using equal access, and we want to remove the ruleid from data-udoit-ignore, we filter out the ruleid
+        // by turning data-udoit-ignore into an array of strings, specifically excluding the ruleid using a filter,
+        // then turning it into a string again
+        const currentIgnoreAttribute = Html.getAttribute(tempIssue.sourceHtml, "data-udoit-ignore") || "";
+        const ignoreArray = currentIgnoreAttribute.split(" ").filter(id => id !== "" && id !== tempIssue.scanRuleId);
+        const newIgnoreAttribute = ignoreArray.length > 0 ? ignoreArray.join(" ") : "";
+
+        tempIssue.newHtml = Html.toString(Html.setAttribute(tempIssue.sourceHtml, "data-udoit-ignore", newIgnoreAttribute))
+      }
+      else {
+        tempIssue.newHtml = Html.toString(Html.removeClass(tempIssue.sourceHtml, 'phpally-ignore'))
+      }
     }
     else {
       tempIssue.status = 2
-      tempIssue.newHtml = Html.toString(Html.addClass(tempIssue.sourceHtml, 'phpally-ignore'))
+
+      // adding the ignore attribute to the html
+      if (process.env.ACCESSIBILITY_CHECKER === 'equalaccess_lambda' || process.env.ACCESSIBILITY_CHECKER === 'equalaccess_local') {
+        // when using equal access, we append the rule name to the data-udoit-ignore attribute,
+        // since applying phpally-ignore can cause issues with the same HTML to all be ignored
+        let newIgnoreAttribute = Html.getAttribute(tempIssue.sourceHtml, "data-udoit-ignore")
+
+        if (newIgnoreAttribute) {
+          newIgnoreAttribute = `${newIgnoreAttribute} ${tempIssue.scanRuleId}`
+        }
+        else {
+          newIgnoreAttribute = tempIssue.scanRuleId
+        }
+        
+        tempIssue.newHtml = Html.toString(Html.setAttribute(tempIssue.sourceHtml, "data-udoit-ignore", newIgnoreAttribute))
+      }
+      else {
+        tempIssue.newHtml = Html.toString(Html.addClass(tempIssue.sourceHtml, 'phpally-ignore'))
+      }
     }
 
     // Save the updated issue using the LMS API

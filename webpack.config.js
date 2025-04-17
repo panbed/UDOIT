@@ -1,6 +1,6 @@
 var Encore = require('@symfony/webpack-encore')
 const CopyWebpackPlugin = require('copy-webpack-plugin')
-var path = require('path')
+const Dotenv = require('dotenv-webpack')
 
 // Manually configure the runtime environment if not already configured yet by the "encore" command.
 // It's useful when you use tools that rely on webpack.config.js file.
@@ -14,6 +14,11 @@ Encore.setOutputPath('public/build')
   .setManifestKeyPrefix('build')
   .addEntry('app', './assets/js/index.js')
   .addEntry('admin', './assets/js/admin.js')
+
+  .addPlugin(new Dotenv({
+    systemvars: true,
+    path: './.env',
+  }))
 
   .addPlugin(new CopyWebpackPlugin({
     patterns: [
