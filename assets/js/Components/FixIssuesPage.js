@@ -3,6 +3,7 @@ import FixIssuesFilters from './FixIssuesFilters'
 import FixIssuesList from './FixIssuesList'
 import FixIssuesContentPreview from './FixIssuesContentPreview'
 import UfixitWidget from './UfixitWidget'
+import { formNameFromRule } from '../Services/Ufixit'
 import * as Html from '../Services/Html'
 import Api from '../Services/Api'
 
@@ -114,8 +115,11 @@ export default function FixIssuesPage({
 
     let issueSeverity = FILTER.ISSUE
     // PHPAlly returns a type of 'error' or 'suggestion'
-    if(issue.type == 'suggestion') {
+    if(issue.type === 'suggestion' || issue.type === 'SUGGESTION') {
       issueSeverity = FILTER.SUGGESTION
+    }
+    else if(issue.type === 'potential' || issue.type === 'POTENTIAL' || issue.type === 'MANUAL') {
+      issueSeverity = FILTER.POTENTIAL
     }
     
     let issueContentType = FILTER.ALL
@@ -200,6 +204,9 @@ export default function FixIssuesPage({
       currentState = sessionIssues[issue.id]
     }
 
+    let formName = formNameFromRule(issue.scanRuleId)
+    let formLabel = t(`form.label.${formName}`)
+
     return {
       issueData: Object.assign({}, issue),
       id: issue.id,
@@ -208,7 +215,8 @@ export default function FixIssuesPage({
       sectionIds: issueSectionIds,
       keywords: createKeywords(issue, tempContentItem),
       scanRuleId: issue.scanRuleId,
-      scanRuleLabel: t(`rule.label.${issue.scanRuleId}`),
+      formName: formName,
+      formLabel: formLabel,
       contentId: tempContentItem.lmsContentId,
       contentType: issueContentType,
       contentTypeLabel: t(`content.${tempContentItem.contentType}`),
@@ -229,7 +237,7 @@ export default function FixIssuesPage({
       issueResolution = FILTER.RESOLVED
     }
 
-    let scanRuleLabel = t(`rule.label.file`)
+    let formLabel = t(`rule.label.file`)
 
     let fileTypeLabel = t(`content.file`)
     
@@ -297,7 +305,7 @@ export default function FixIssuesPage({
       sectionIds: fileSectionIds,
       keywords: keywords,
       scanRuleId: 'aaaa_verify_file_accessibility',
-      scanRuleLabel: scanRuleLabel,
+      formLabel: formLabel,
       contentId: fileData.lmsFileId,
       contentType: FILTER.FILE_OBJECT,
       contentTypeLabel: fileTypeLabel,

@@ -3,7 +3,7 @@ import ProgressBar from './ProgressBar'
 import SeverityIcon from './Icons/SeverityIcon'
 import './HomePage.css'
 
-export default function HomePage({ t, report, hasNewReport, quickIssues }) {
+export default function HomePage({ t, report, hasNewReport, quickIssues, handleFullCourseRescan }) {
 
   const [totalIssues, setTotalIssues] = useState(0)
   const [totalPotentialIssues, setTotalPotentialIssues] = useState(0)
