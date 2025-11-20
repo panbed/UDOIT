@@ -7,6 +7,7 @@ use App\Entity\ContentItem;
 use App\Services\PhpAllyService;
 use App\Services\EqualAccessService;
 use App\Services\AsyncEqualAccessReport;
+use App\Services\QueuedEqualAccessReport;
 
 use App\Services\HtmlService;
 use App\Services\UtilityService;
@@ -46,7 +47,7 @@ class ScannerService {
             return null;
         }
 
-        $printOutput = new ConsoleOutput();
+        $output = new ConsoleOutput();
         $scanner = $_ENV['ACCESSIBILITY_CHECKER'];
         $report = null;
         $response = new ApiResponse();
@@ -77,6 +78,22 @@ class ScannerService {
                 $json = $localService->scanContentItem($contentItem);
                 $report = $equalAccess->generateReport($json);
             }
+            else if ($scanner == 'equalaccess_sqs') {
+                $equalAccess = new EqualAccessService();
+
+                if (!$scannerReport) {
+                    // Report is null, we need to call the SQS
+                    $queuedReport = new QueuedEqualAccessReport();
+                    $json = $queuedReport->postSingleAsync($contentItem);
+                    $report = $equalAccess->generateReport($json);
+                }
+                else {
+                    // We already have the report, all we have to do is generate the UDOIT report
+                    $report = $equalAccess->generateReport($scannerReport);
+                    // $output->writeln("SQS report:");
+                    // $output->writeln(json_encode($scannerReport, JSON_PRETTY_PRINT));
+                }
+            }
             else if ($scanner == 'equalaccess_lambda') {
                 $equalAccess = new EqualAccessService();
                 //$document = $this->getDomDocument($contentItem->getBody());
@@ -101,6 +118,9 @@ class ScannerService {
         catch (\Throwable $e) {
             $response->addMessage($e->getMessage(), 'error');
         }
+
+        // $output->writeln("Report generated:");
+        // $output->writeln(json_encode($report, JSON_PRETTY_PRINT));
 
         return $report;
     }
