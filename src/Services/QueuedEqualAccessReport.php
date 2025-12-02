@@ -48,7 +48,8 @@ class QueuedEqualAccessReport {
         return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
     }
 
-    public function sendToSqs($messageBody, $scanId) {
+    // Send page(s) to the SQS scan queue
+    public function sendToSqs($messageBody) {
         $sqsClient = new \Aws\Sqs\SqsClient([
             'region' => $this->awsRegion,
             'version' => 'latest',
@@ -62,26 +63,21 @@ class QueuedEqualAccessReport {
             ]
         ]);
 
-        // Send the page to the SQS scan queue (currently a FIFO queue)
         try {
             $result = $sqsClient->sendMessage([
                 'QueueUrl' => $this->sqsScanQueue,
                 'MessageBody' => $messageBody,
-                'MessageGroupId' => "scan-{$scanId}",
-                'MessageDeduplicationId' => $this->uuidv4(),
             ]);
-
             return $result->get('MessageId');
         } catch (\Aws\Exception\AwsException $e) {
-            $output = new ConsoleOutput();
-            $output->writeln('Error sending message to SQS: ' . $e->getMessage());
+            error_log("Error sending message to SQS: " . $e->getMessage());
             return null;
         }
     }
 
     // After queuing up all the pages we want to scan, we poll the results queue continuously
-    // with the scanId we sent earlier
-    public function pollResultsQueue($scanId, array $uuids, int $timeoutSeconds = 240, int $pollIntervalSeconds = 5): array {
+    // until we get all of the reports we need back
+    public function pollResultsQueue(array $uuids, int $timeoutSeconds = 240): array {
         $output = new ConsoleOutput();
         $sqsClient = new \Aws\Sqs\SqsClient([
             'region' => $this->awsRegion,
@@ -96,8 +92,7 @@ class QueuedEqualAccessReport {
         $startTime = time();
         $count = 0;
 
-        // Loop until we reach the timeout (default 4 minutes, 240 seconds) or
-        // until we have the same number of UUIDs (page scans) as results
+        // Poll until we get all the results or until we reach the timeout limit
         while (time() - $startTime < $timeoutSeconds && count($results) < count($uuids)) {
             $result = $sqsClient->receiveMessage([
                 'QueueUrl' => $this->sqsResultQueue,
@@ -108,34 +103,36 @@ class QueuedEqualAccessReport {
             if (!empty($result->get('Messages'))) {
                 foreach ($result->get('Messages') as $message) {
                     $body = json_decode($message['Body'], true);
-
-                    // Check if the message belongs to our scan by checking both
-                    // the scanId (the entire scan) and the UUIDs (each individual page)
-                    if ($body['scanId'] === $scanId && in_array($body['uuid'], $uuids)) {
+                    
+                    // Check if the UUID that we got from polling actually belongs to us
+                    if (in_array($body['uuid'], $uuids)) {
+                        // Add report to the results array under its UUID
                         $results[$body['uuid']] = $body['report'];
                         $count++;
 
-                        // Delete the message from the queue
+                        // Delete the message from the queue so it's not picked up again
                         $sqsClient->deleteMessage([
                             'QueueUrl' => $this->sqsResultQueue,
                             'ReceiptHandle' => $message['ReceiptHandle'],
                         ]);
                     }
+                    else {
+                        // Probably picked up another message that we don't want to process?
+                        $output->writeln("UUID not processed: " . $body['uuid']);
+                    }
                 }
             }
 
-            // sleep($pollIntervalSeconds);
+            // Sleep a tiny bit before polling again
+            usleep(500000);
         }
 
-        // $output = new ConsoleOutput();
-        // $output->writeln(json_encode($results, JSON_PRETTY_PRINT));
-        // $output->writeln("Received {count($results)} out of " . count($uuids) . " results for scan {$scanId}");
+        $output->writeln("Number of UUIDs processed: " . $count);
 
         return $results;
     }
 
     public function postMultipleArrayAsync(array $contentItems): array {
-        // TODO: Update for FIFO queue
         $uuids = [];
         $contentItemsReport = [];
 
@@ -175,9 +172,6 @@ class QueuedEqualAccessReport {
         // Poll the results queue for reports
         $results = $this->pollResultsQueue($uuids);
 
-        $output = new ConsoleOutput();
-        // $output->writeln(json_encode($results, JSON_PRETTY_PRINT));
-
         $errors = 0;
 
         foreach ($results as $result) {
@@ -200,14 +194,9 @@ class QueuedEqualAccessReport {
         return $contentItemsReport;
     }
 
-
     public function postMultipleAsync(array $contentItems): array {
         $output = new ConsoleOutput();
-
-        $scanId = $this->uuidv4();
         $uuids = [];
-
-        $output->writeln("Starting scan with ID: {$scanId}");
 
         // Queue up all content items to be scanned
         foreach ($contentItems as $contentItem) {
@@ -218,74 +207,57 @@ class QueuedEqualAccessReport {
             $html = $contentItem->getBody();
             // $document = $this->getDomDocument($html)->saveHTML();
             $payload = json_encode([
-                "scanId" => $scanId,
                 "uuid" => $uuid, 
                 "html" => $html,
                 "guidelineIds" => "WCAG_2_1",
                 'reportLevels' => ['violation', 'potentialviolation', 'manual', 'recommendation']
             ]);
 
-            $this->sendToSqs($payload, $scanId);
+            $this->sendToSqs($payload);
         }
 
         // Poll for results from the results queue
-        $results = $this->pollResultsQueue($scanId, $uuids);
+        $results = $this->pollResultsQueue($uuids);
 
         // Save the report for the content item into an array.
-        // They should (in theory) be in the same order they were sent in.
+        // Since we aren't necessarily getting them in the same order we sent them in,
+        // we need to map them into the original order (since back in LmsFetchService.php we're expecting that)
         $contentItemsReport = [];
-
         foreach ($uuids as $uuid) {
             if (isset($results[$uuid])) {
                 $contentItemsReport[] = $results[$uuid];
             }
             else {
-                $output->writeln("No result for UUID: {$uuid}");
+                // Somehow we ended up with a missing report...
+                $output->writeln("No report found for UUID: " . $uuid);
+                $contentItemsReport[] = null;
             }
         }
-
-        // $output->writeln(json_encode($results, JSON_PRETTY_PRINT));
-        
-        // foreach ($results as $uuid => $report) {
-        //     // $response = $result->getBody()->getContents();
-        //     // $json = json_decode($response, true);
-
-        //     // $output->writeln(json_encode($report, JSON_PRETTY_PRINT));
-
-        //     $contentItemsReport[] = $report;
-        // }
 
         return $contentItemsReport;
     }
 
     // Scan a single content item
     public function postSingleAsync(ContentItem $contentItem) {
-        $scanId = $this->uuidv4();
-        $uuid = $this->uuidv4();
+        $report = null;
 
-        // Clean up the content item's HTML document and create a payload to send
+        // Clean up the content item's HTML document
+        // and create a payload to send
+        $uuid = $this->uuidv4();
         $html = $contentItem->getBody();
         // $document = $this->getDomDocument($html)->saveHTML();
-        $payload = json_encode([
-            "scanId" => $scanId,
-            "uuid" => $uuid, 
-            "html" => $html,
-            "guidelineIds" => "WCAG_2_1",
-            'reportLevels' => ['violation', 'potentialviolation', 'manual', 'recommendation']
-        ]);
+        $payload = json_encode(["uuid" => $uuid, "html" => $html]);
 
-        $this->sendToSqs($payload, $scanId);
+        // Send to SQS
+        $this->sendToSqs($payload);
 
         // Poll for the result from the results queue
-        $report = $this->pollResultsQueue($scanId, [$uuid], 60);
-
-        // $output = new ConsoleOutput();
-        // $output->writeln("Single async result:");
-        // $output->writeln(json_encode($report, JSON_PRETTY_PRINT));
+        $report = $this->pollResultsQueue([$uuid], 60, 2);
 
         // Return the Equal Access report
-        return $report[$uuid] ?? null;
+        return $report[$uuid];
     }
+
 
     public function getDomDocument($html) {
         // TODO: For some reason this causes the scan to not work?
