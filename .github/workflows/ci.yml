@@ -6,6 +6,7 @@ on:
       - main
       - 'stable/*'
       - 'new-main-page-UX'
+      - 'redis'
 
 env:
   REGISTRY: ghcr.io
