@@ -78,7 +78,7 @@ class ScannerService {
                 $json = $localService->scanContentItem($contentItem);
                 $report = $equalAccess->generateReport($json);
             }
-            else if ($scanner == 'equalaccess_sqs') {
+            else if ($scanner == 'equalaccess_redis') {
                 $equalAccess = new EqualAccessService();
 
                 if (!$scannerReport) {
@@ -90,8 +90,6 @@ class ScannerService {
                 else {
                     // We already have the report, all we have to do is generate the UDOIT report
                     $report = $equalAccess->generateReport($scannerReport);
-                    // $output->writeln("SQS report:");
-                    // $output->writeln(json_encode($scannerReport, JSON_PRETTY_PRINT));
                 }
             }
             else if ($scanner == 'equalaccess_lambda') {
@@ -118,9 +116,6 @@ class ScannerService {
         catch (\Throwable $e) {
             $response->addMessage($e->getMessage(), 'error');
         }
-
-        // $output->writeln("Report generated:");
-        // $output->writeln(json_encode($report, JSON_PRETTY_PRINT));
 
         return $report;
     }

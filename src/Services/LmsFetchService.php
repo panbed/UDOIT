@@ -238,7 +238,7 @@ class LmsFetchService {
         if ($scanner == "equalaccess_lambda" && count($contentItems) > 0) {
             $equalAccessReports = $this->asyncReport->postMultipleArrayAsync($contentItems);
         }
-        else if ($scanner == "equalaccess_sqs" && count($contentItems) > 0) {
+        else if ($scanner == "equalaccess_redis" && count($contentItems) > 0) {
             $equalAccessReports = $this->queuedReport->postMultipleAsync($contentItems);
         }
 
@@ -301,7 +301,7 @@ class LmsFetchService {
         }
 
         $scanner = $_ENV['ACCESSIBILITY_CHECKER'];
-        if ($scanner == 'equalaccess_lambda' || $scanner == 'equalaccess_local' || $scanner == 'equalaccess_sqs') {
+        if ($scanner == 'equalaccess_lambda' || $scanner == 'equalaccess_local' || $scanner == 'equalaccess_redis') {
           $issueType = $this->equalAccess->getIssueType($issue->getMetadata());
           if($issueType == 'pass') {
             // If the issue is a pass, we don't create an issue for it
@@ -331,7 +331,7 @@ class LmsFetchService {
         $issueType = self::ISSUE_TYPE_ERROR;
 
         $scanner = $_ENV['ACCESSIBILITY_CHECKER'];
-        if ($scanner == 'equalaccess_lambda' || $scanner == 'equalaccess_local' || $scanner == 'equalaccess_sqs') {
+        if ($scanner == 'equalaccess_lambda' || $scanner == 'equalaccess_local' || $scanner == 'equalaccess_redis') {
           $issueType = $this->equalAccess->getIssueType($issue->metadata);
         }
 

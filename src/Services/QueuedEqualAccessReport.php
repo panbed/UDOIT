@@ -3,37 +3,30 @@
 namespace App\Services;
 
 use App\Entity\ContentItem;
-
+use Predis\Client as RedisClient;
 use DOMDocument;
-
-use Aws\Credentials\Credentials;
-use Aws\Signature\SignatureV4;
 
 use Symfony\Component\Console\Output\ConsoleOutput;
 
 // Take in a bundle of ContentItems and
-// send them to an SQS queue for processing
-// by Equal Access Server workers
-
+// place them in a Redis queue that 
+// Equal Access Server workers will process
 class QueuedEqualAccessReport {
     private $client;
-    private $awsAccessKeyId;
-    private $awsSecretAccessKey;
-    private $awsRegion;
-    private $sqsScanQueue;
-    private $sqsResultQueue;
+    private $redisClient;
+    private $scanQueue = 'scan_queue';
+    private $resultQueue = 'result_queue';
 
     public function __construct() {
         $this->loadConfig();
     }
 
     private function loadConfig() {
-        // Load variables for AWS
-        $this->awsAccessKeyId = $_ENV['EQUALACCESS_AWS_ACCESS_KEY_ID'];
-        $this->awsSecretAccessKey = $_ENV['EQUALACCESS_AWS_SECRET_ACCESS_KEY'];
-        $this->awsRegion = $_ENV['EQUALACCESS_AWS_REGION'];
-        $this->sqsScanQueue = $_ENV['EQUALACCESS_AWS_SQS_SCAN_QUEUE_URL'];
-        $this->sqsResultQueue = $_ENV['EQUALACCESS_AWS_SQS_RESULT_QUEUE_URL'];
+        $this->redisClient = new RedisClient([
+            'scheme' => 'tcp',
+            'host'   => $_ENV['REDIS_HOST'] ?? 'host.docker.internal',
+            'port'   => $_ENV['REDIS_PORT'] ?? 6379,
+        ]);
     }
 
     // Source - https://stackoverflow.com/questions/2040240/php-function-to-generate-v4-uuid
@@ -48,189 +41,164 @@ class QueuedEqualAccessReport {
         return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
     }
 
-    // Send page(s) to the SQS scan queue
-    public function sendToSqs($messageBody) {
-        $sqsClient = new \Aws\Sqs\SqsClient([
-            'region' => $this->awsRegion,
-            'version' => 'latest',
-            'credentials' => [
-                'key' => $this->awsAccessKeyId,
-                'secret' => $this->awsSecretAccessKey,
-            ],
-            'http' => [
-                'connect_timeout' => 5,
-                'timeout' => 240,
-            ]
-        ]);
-
+    // Send page(s) to the Redis queue
+    public function sendToRedis($messageBody) {
         try {
-            $result = $sqsClient->sendMessage([
-                'QueueUrl' => $this->sqsScanQueue,
-                'MessageBody' => $messageBody,
-            ]);
-            return $result->get('MessageId');
-        } catch (\Aws\Exception\AwsException $e) {
-            error_log("Error sending message to SQS: " . $e->getMessage());
-            return null;
+            $this->redisClient->rpush($this->scanQueue, $messageBody);
+            return true;
+        } catch (\Exception $e) {
+            error_log("Error sending message to Redis: " . $e->getMessage());
+            return false;
         }
     }
 
     // After queuing up all the pages we want to scan, we poll the results queue continuously
-    // until we get all of the reports we need back
-    public function pollResultsQueue(array $uuids, int $timeoutSeconds = 240): array {
+    // for our scanId bundle until we get all of the reports we need back
+    public function pollRedisResults(string $scanId, array $uuids, int $timeoutSeconds = 240): array {
         $output = new ConsoleOutput();
-        $sqsClient = new \Aws\Sqs\SqsClient([
-            'region' => $this->awsRegion,
-            'version' => 'latest',
-            'credentials' => [
-                'key' => $this->awsAccessKeyId,
-                'secret' => $this->awsSecretAccessKey,
-            ],
-        ]);
-
         $results = [];
         $startTime = time();
-        $count = 0;
+        $remaining = $uuids;
 
-        // Poll until we get all the results or until we reach the timeout limit
-        while (time() - $startTime < $timeoutSeconds && count($results) < count($uuids)) {
-            $result = $sqsClient->receiveMessage([
-                'QueueUrl' => $this->sqsResultQueue,
-                'MaxNumberOfMessages' => 10,
-                'WaitTimeSeconds' => 20,
-            ]);
+        $output->writeln("Polling for scanId: " . $scanId);
 
-            if (!empty($result->get('Messages'))) {
-                foreach ($result->get('Messages') as $message) {
-                    $body = json_decode($message['Body'], true);
+        while (time() - $startTime < $timeoutSeconds && !empty($remaining)) {
+            $foundAny = false;
+
+            foreach ($remaining as $index => $uuid) {
+                $key = "result:{$scanId}:{$uuid}";
+    
+                $reportJson = $this->redisClient->get($key);
+
+                if ($reportJson !== null) {
+                    $results[$uuid] = json_decode($reportJson, true);
                     
-                    // Check if the UUID that we got from polling actually belongs to us
-                    if (in_array($body['uuid'], $uuids)) {
-                        // Add report to the results array under its UUID
-                        $results[$body['uuid']] = $body['report'];
-                        $count++;
-
-                        // Delete the message from the queue so it's not picked up again
-                        $sqsClient->deleteMessage([
-                            'QueueUrl' => $this->sqsResultQueue,
-                            'ReceiptHandle' => $message['ReceiptHandle'],
-                        ]);
-                    }
-                    else {
-                        // Probably picked up another message that we don't want to process?
-                        $output->writeln("UUID not processed: " . $body['uuid']);
-                    }
+                    // Remove from the remaining list
+                    unset($remaining[$index]);
+                    $foundAny = true;
+                    
+                    // Delete key after consuming
+                    $this->redisClient->del($key);
+                    
+                    $output->writeln(sprintf(
+                        "Received %d/%d (UUID: %s)",
+                        count($results),
+                        count($uuids),
+                        substr($uuid, 0, 8)
+                    ));
                 }
             }
 
-            // Sleep a tiny bit before polling again
-            usleep(500000);
+            if ($foundAny) {
+                continue;
+            }
+            
+            if (!empty($remaining)) {
+                usleep(200000);
+            }
         }
 
-        $output->writeln("Number of UUIDs processed: " . $count);
+        if (!empty($remaining)) {
+            $output->writeln("WARNING: Missing " . count($remaining) . " results after timeout");
+        }
 
         return $results;
     }
 
-    public function postMultipleArrayAsync(array $contentItems): array {
-        $uuids = [];
-        $contentItemsReport = [];
+    // TODO
+    // public function postMultipleArrayAsync(array $contentItems): array {
+    //     $uuids = [];
+    //     $contentItemsReport = [];
 
-        // Combine every <num> pages into a request
-        $htmlArray = [];
-        $counter = 0;
-        $payloadSize = 5;
-        foreach ($contentItems as $contentItem) {
-            if ($counter >= $payloadSize) {
-                // Reached our counter limit, create a new payload
-                // and create and sign a request that we send to the SQS queue
-                $uuid = $this->uuidv4();
-                $uuids[] = $uuid;
-                $payload = json_encode(["uuid" => $uuid, "html" => $htmlArray]);
-                $this->sendToSqs($payload);
-                $counter = 0;
-                $htmlArray = [];
-            }
+    //     // Combine every <num> pages into a request
+    //     $htmlArray = [];
+    //     $counter = 0;
+    //     $payloadSize = 5;
+    //     foreach ($contentItems as $contentItem) {
+    //         if ($counter >= $payloadSize) {
+    //             // Reached our counter limit, create a new payload
+    //             // and create and sign a request that we send to the SQS queue
+    //             $uuid = $this->uuidv4();
+    //             $uuids[] = $uuid;
+    //             $payload = json_encode(["uuid" => $uuid, "html" => $htmlArray]);
+    //             $this->sendToSqs($payload);
+    //             $counter = 0;
+    //             $htmlArray = [];
+    //         }
 
-            // Get the HTML then clean up and push a page into an array
-            $html = $contentItem->getBody();
-            $document = $this->getDomDocument($html)->saveHTML();
-            array_push($htmlArray, $document);
+    //         // Get the HTML then clean up and push a page into an array
+    //         $html = $contentItem->getBody();
+    //         $document = $this->getDomDocument($html)->saveHTML();
+    //         array_push($htmlArray, $document);
 
-            $counter++;
-        }
+    //         $counter++;
+    //     }
 
-        // Send out any leftover pages we might have
-        if (count($htmlArray) > 0) {
-            $uuid = $this->uuidv4();
-            $uuids[] = $uuid;
-            $payload = json_encode(["uuid" => $uuid, "html" => $htmlArray]);
+    //     // Send out any leftover pages we might have
+    //     if (count($htmlArray) > 0) {
+    //         $uuid = $this->uuidv4();
+    //         $uuids[] = $uuid;
+    //         $payload = json_encode(["uuid" => $uuid, "html" => $htmlArray]);
 
-            $this->sendToSqs($payload);
-        }
+    //         $this->sendToSqs($payload);
+    //     }
 
-        // Poll the results queue for reports
-        $results = $this->pollResultsQueue($uuids);
+    //     // Poll the results queue for reports
+    //     $results = $this->pollResultsQueue($uuids);
 
-        $errors = 0;
+    //     $errors = 0;
 
-        foreach ($results as $result) {
-            // Every "block" of reports pages should be in a stringified
-            // JSON, so we need to decode the JSON to be able to iterate through
-            // it first.}
+    //     foreach ($results as $result) {
+    //         // Every "block" of reports pages should be in a stringified
+    //         // JSON, so we need to decode the JSON to be able to iterate through
+    //         // it first.}
 
-            if (isset($result["value"])) {
-                $response = json_decode($result["value"]->getBody()->getContents(), true);
-            }
-            else if (isset($result["reason"])) {
-                $errors++;
-            }
+    //         if (isset($result["value"])) {
+    //             $response = json_decode($result["value"]->getBody()->getContents(), true);
+    //         }
+    //         else if (isset($result["reason"])) {
+    //             $errors++;
+    //         }
 
-            foreach ($response as $report) {
-                $contentItemsReport[] = $report;
-            }
-        }
+    //         foreach ($response as $report) {
+    //             $contentItemsReport[] = $report;
+    //         }
+    //     }
 
-        return $contentItemsReport;
-    }
+    //     return $contentItemsReport;
+    // }
 
     public function postMultipleAsync(array $contentItems): array {
         $output = new ConsoleOutput();
+        $scanId = $this->uuidv4();
         $uuids = [];
 
-        // Queue up all content items to be scanned
+        $output->writeln("Starting scan: " . $scanId);
+
         foreach ($contentItems as $contentItem) {
             $uuid = $this->uuidv4();
             $uuids[] = $uuid;
 
-            // Get the HTML, clean it up, save it into a JSON and then queue it up
             $html = $contentItem->getBody();
-            // $document = $this->getDomDocument($html)->saveHTML();
             $payload = json_encode([
+                "scanId" => $scanId,
                 "uuid" => $uuid, 
                 "html" => $html,
                 "guidelineIds" => "WCAG_2_1",
                 'reportLevels' => ['violation', 'potentialviolation', 'manual', 'recommendation']
             ]);
 
-            $this->sendToSqs($payload);
+            $this->sendToRedis($payload);
         }
 
-        // Poll for results from the results queue
-        $results = $this->pollResultsQueue($uuids);
+        // Poll for results
+        $results = $this->pollRedisResults($scanId, $uuids);
 
-        // Save the report for the content item into an array.
-        // Since we aren't necessarily getting them in the same order we sent them in,
-        // we need to map them into the original order (since back in LmsFetchService.php we're expecting that)
         $contentItemsReport = [];
         foreach ($uuids as $uuid) {
-            if (isset($results[$uuid])) {
-                $contentItemsReport[] = $results[$uuid];
-            }
-            else {
-                // Somehow we ended up with a missing report...
-                $output->writeln("No report found for UUID: " . $uuid);
-                $contentItemsReport[] = null;
+            $contentItemsReport[] = $results[$uuid] ?? null;
+            if (!isset($results[$uuid])) {
+                $output->writeln("Missing result: " . substr($uuid, 0, 8));
             }
         }
 
@@ -239,25 +207,25 @@ class QueuedEqualAccessReport {
 
     // Scan a single content item
     public function postSingleAsync(ContentItem $contentItem) {
-        $report = null;
-
-        // Clean up the content item's HTML document
-        // and create a payload to send
+        $scanId = $this->uuidv4();
         $uuid = $this->uuidv4();
+
         $html = $contentItem->getBody();
-        // $document = $this->getDomDocument($html)->saveHTML();
-        $payload = json_encode(["uuid" => $uuid, "html" => $html]);
+        $payload = json_encode([
+            "scanId" => $scanId,
+            "uuid" => $uuid, 
+            "html" => $html,
+            "guidelineIds" => "WCAG_2_1",
+            'reportLevels' => ['violation', 'potentialviolation', 'manual', 'recommendation']
+        ]);
 
-        // Send to SQS
-        $this->sendToSqs($payload);
+        $this->sendToRedis($payload);
+        
+        // Poll for results
+        $results = $this->pollRedisResults($scanId, [$uuid], 60);
 
-        // Poll for the result from the results queue
-        $report = $this->pollResultsQueue([$uuid], 60, 2);
-
-        // Return the Equal Access report
-        return $report[$uuid];
+        return $results[$uuid] ?? null;
     }
-
 
     public function getDomDocument($html) {
         // TODO: For some reason this causes the scan to not work?
