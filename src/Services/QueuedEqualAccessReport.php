@@ -22,11 +22,7 @@ class QueuedEqualAccessReport {
     }
 
     private function loadConfig() {
-        $this->redisClient = new RedisClient([
-            'scheme' => 'tcp',
-            'host'   => $_ENV['REDIS_HOST'] ?? 'host.docker.internal',
-            'port'   => $_ENV['REDIS_PORT'] ?? 6379,
-        ]);
+        $this->redisClient = new RedisClient($_ENV['REDIS_URL'] ?? 'redis://host.docker.internal:6379');
     }
 
     // Source - https://stackoverflow.com/questions/2040240/php-function-to-generate-v4-uuid
