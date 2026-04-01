@@ -70,10 +70,10 @@ jobs:
 
       - name: Create and populate MySQL database
         env:
-          DATABASE_URL: mysql://root:root@localhost
+          DATABASE_URL: mysql://root:root@localhost/udoit
         run: |
           sudo systemctl start mysql.service
-          php bin/console doctrine:database:create
+          mysql -u root -proot -e "CREATE DATABASE IF NOT EXISTS udoit;"
           php bin/console doctrine:migrations:migrate
 
       # Fix permissions before cleanup that may be used during 'Use Node' job
