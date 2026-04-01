@@ -70,7 +70,7 @@ jobs:
 
       - name: Create and populate MySQL database
         env:
-          DATABASE_URL: mysql://root:root@localhost/udoit
+          DATABASE_URL: mysql://root:root@localhost
         run: |
           sudo systemctl start mysql.service
           php bin/console doctrine:database:create
