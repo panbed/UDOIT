@@ -10,7 +10,7 @@ jobs:
       matrix:
         operating-system: [ubuntu-latest]
         php-versions: ['8.5']
-        node-version: [20.19.0]
+        node-version: [24.14.0]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,7 +29,8 @@ jobs:
         uses: shivammathur/setup-php@v2 #https://github.com/shivammathur/setup-php
         with:
           php-version: ${{ matrix.php-versions }}
-          extensions: mbstring, xml, ctype, iconv, intl, pdo_sqlite, gd, pdo_mysql, pdo_pgsql
+          # extensions: mbstring, xml, ctype, iconv, intl, pdo_sqlite, gd, pdo_mysql, pdo_pgsql
+          extensions: mbstring, xml, ctype, iconv, intl, gd, pdo_mysql
           coverage: xdebug #optional
 
       - name: Cache composer dependencies
@@ -57,22 +58,23 @@ jobs:
       # - name: Yarn test
       #   run: yarn test
 
-      - name: Start and initialize Postgres
-        env:
-          DATABASE_URL: postgresql://udoit:udoit@127.0.0.1:5432/udoit?serverVersion=11&charset=utf8
-        run: |
-          sudo systemctl start postgresql.service
-          sudo -u postgres psql -c "CREATE DATABASE udoit;"
-          sudo -u postgres psql -c "CREATE USER udoit WITH PASSWORD 'udoit';"
-          sudo -u postgres psql -c "ALTER USER udoit WITH SUPERUSER;"
-          sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE "udoit" TO udoit;"
-          php bin/console doctrine:migrations:migrate
+      # - name: Start and initialize Postgres
+      #   env:
+      #     DATABASE_URL: postgresql://udoit:udoit@127.0.0.1:5432/udoit?serverVersion=11&charset=utf8
+      #   run: |
+      #     sudo systemctl start postgresql.service
+      #     sudo -u postgres psql -c "CREATE DATABASE udoit;"
+      #     sudo -u postgres psql -c "CREATE USER udoit WITH PASSWORD 'udoit';"
+      #     sudo -u postgres psql -c "ALTER USER udoit WITH SUPERUSER;"
+      #     sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE "udoit" TO udoit;"
+      #     php bin/console doctrine:migrations:migrate
 
       - name: Create and populate MySQL database
         env:
           DATABASE_URL: mysql://root:root@localhost/udoit
         run: |
           sudo systemctl start mysql.service
+          mysql -u root -proot -e "SELECT VERSION();"
           mysql -u root -proot -e "CREATE DATABASE IF NOT EXISTS udoit;"
           php bin/console doctrine:migrations:migrate
 
