@@ -7,7 +7,7 @@ import FixIssuesContentPreview from './Widgets/FixIssuesContentPreview'
 import LeftArrowIcon from './Icons/LeftArrowIcon'
 import RightArrowIcon from './Icons/RightArrowIcon'
 import CloseIcon from './Icons/CloseIcon'
-import { FORM_CLASSIFICATIONS, formFromIssue, formNameFromRule, formNames } from '../Services/Ufixit'
+import { formNameFromRule } from '../Services/Ufixit'
 import * as Html from '../Services/Html'
 import Api from '../Services/Api'
 
@@ -34,14 +34,14 @@ export default function FixIssuesPage({
   initialSeverity = '',
   initialSearchTerm = '',
   contentItemCache,
-  addContentItemToCache,
   report,
   sections,
   processNewReport,
   addMessage,
   sessionIssues,
   updateSessionIssue,
-  processServerError
+  processServerError,
+  setModalActive
 })
 {
 
@@ -66,9 +66,10 @@ export default function FixIssuesPage({
 
   const WIDGET_STATE = settings.WIDGET_STATE
 
-  const dialogId = "issue-dialog"
+  const dialogId = "udoit-issue-dialog"
 
   const [activeIssue, setActiveIssue] = useState(null)
+  const [mostRecentIssueId, setMostRecentIssueId] = useState(null)
   const [tempActiveIssue, setTempActiveIssue] = useState(null)
   const [activeContentItem, setActiveContentItem] = useState(null)
   const [tempActiveContentItem, setTempActiveContentItem] = useState(null)
@@ -104,11 +105,9 @@ export default function FixIssuesPage({
   const formatIssueData = (issue) => {
 
     let issueSeverity = FILTER.ISSUE
-    // PHPAlly returns a type of 'error' or 'suggestion'
-    if(issue.type === 'suggestion' || issue.type === 'SUGGESTION') {
-      issueSeverity = FILTER.SUGGESTION
-    }
-    else if(issue.type === 'potential' || issue.type === 'POTENTIAL' || issue.type === 'MANUAL') {
+    let issueType = issue.type.toLowerCase()
+
+    if(issueType === 'suggestion' || issueType === 'potential' || issueType === 'manual') {
       issueSeverity = FILTER.POTENTIAL
     }
     
@@ -116,10 +115,9 @@ export default function FixIssuesPage({
     let issueSectionIds = []
     let issueSectionNames = []
     let published = true
-
-    // PHPAlly returns a contentItemId that we can use to get the content type
-    let tempContentItem = getContentById(issue.contentItemId)
     let parentLmsId = null
+    let tempContentItem = getContentById(issue.contentItemId)
+
     if(tempContentItem) {
       let tempContentType = tempContentItem.contentType
 
@@ -157,8 +155,9 @@ export default function FixIssuesPage({
       }
     }
 
+    // A status of 0 in the database means "active" (unresolved barriers and unreviewed files).
     let issueResolution = FILTER.ACTIVE
-    // PHPAlly returns a status of 1 for fixed issues and 2 for resolved issues
+    
     if(issue.status == 1) {
       issueResolution = FILTER.FIXED
     }
@@ -249,6 +248,39 @@ export default function FixIssuesPage({
       setActiveFilters(Object.assign({}, defaultFilters, {[FILTER.TYPE.SEVERITY]: tempSeverity}))
     }
   }, [])
+
+  const handleEscapeKey = (e) => {
+    if(e.key === 'Escape' && widgetState === WIDGET_STATE.FIXIT) {
+      e.preventDefault()
+      closeDialog()
+    }
+  }
+
+  // Pull focus into the dialog when it opens, and return focus to the most recently clicked issue when it closes
+  useEffect(() => {
+    if(widgetState === WIDGET_STATE.FIXIT) {
+      const dialog = document.getElementById(dialogId)
+      if (dialog) {
+        dialog.addEventListener('keydown', handleEscapeKey)
+        const title = dialog.querySelector('#ufixit-dialog-title')
+        if(title) {
+          title.focus()
+        }
+      }
+    }
+    else if(widgetState === WIDGET_STATE.LIST) {
+      if(mostRecentIssueId) {
+        const issueElement = document.getElementById(`issue-item-${mostRecentIssueId}`)
+        if(issueElement) {
+          issueElement.focus() 
+        }
+        const dialog = document.getElementById(dialogId)
+        if (dialog) {
+          dialog.removeEventListener('keydown', handleEscapeKey)
+        }
+      }
+    }
+  }, [widgetState])
 
   // When the filters or search term changes, update the filtered issues list
   useEffect(() => {
@@ -350,9 +382,14 @@ export default function FixIssuesPage({
       return
     }
   
-    setWidgetState(settings.WIDGET_STATE.FIXIT)
-    const activeIssueClone = JSON.parse(JSON.stringify(activeIssue))
+    setMostRecentIssueId(activeIssue.id)
+    
+    // We ONLY want this to trigger events on a real change.
+    if(widgetState !== WIDGET_STATE.FIXIT) {
+      openDialog()
+    }
 
+    const activeIssueClone = JSON.parse(JSON.stringify(activeIssue))
     activeIssueClone.issueData.initialHtml = Html.getIssueHtml(activeIssueClone.issueData)
     setTempActiveIssue(activeIssueClone)
     
@@ -365,7 +402,6 @@ export default function FixIssuesPage({
       setActiveContentItem(null)
     }
     setShowLearnMore(false)
-    openDialog()
 
   }, [activeIssue])
 
@@ -390,12 +426,7 @@ export default function FixIssuesPage({
   const getFilteredContent = (allIssues, includedIssueId = null) => {
     let filteredList = []
     const tempFilters = Object.assign({}, activeFilters)
-
-    // PHPAlly Issues have a 'type' of 'error' or 'suggestion'
-    // // Check for easy issues filter
-    // if (tempFilters.easyIssues && tempFilters.issueTitles.length == 0) {
-    //   tempFilters.issueTitles = easyRules
-    // }
+    
     // Loop through the issues
 
     for (const issue of allIssues) {
@@ -824,26 +855,13 @@ export default function FixIssuesPage({
 
   const openDialog = () => {
     setWidgetState(WIDGET_STATE.FIXIT)
-
-    const dialog = document.getElementById(dialogId)
-    if(dialog && !dialog.open) {
-      dialog.showModal()
-
-      const title = dialog.querySelector('#dialog-title')
-      if(title) {
-        title.focus()
-      }
-    }
+    setModalActive(true)
   }
 
   const closeDialog = () => {
     setWidgetState(WIDGET_STATE.LIST)
+    setModalActive(false)
     setActiveIssue(null)
-
-    const dialog = document.getElementById(dialogId)
-    if(dialog) {
-      dialog.close()
-    }
   }
 
   return (
@@ -851,7 +869,10 @@ export default function FixIssuesPage({
       { widgetState === settings.WIDGET_STATE.LOADING ? (
         <></>
       ) : (
-        <>
+        <div
+          inert={widgetState === WIDGET_STATE.FIXIT ? "inert" : undefined}
+          aria-hidden={widgetState === WIDGET_STATE.FIXIT}
+          >
           <h1 className="pageTitle">{t('barriers.title')}</h1>
           <p className="pageSubtitle">{t('barriers.subtitle')}</p>
 
@@ -873,12 +894,19 @@ export default function FixIssuesPage({
             groupedList={groupedList}
             setActiveIssue={setActiveIssue}
           />
-        </>
+        </div>
       ) }
-      <dialog id={dialogId} className="dialog-full-screen" onClose={closeDialog} aria-labelledby="dialog-title">
+      <div
+        id={dialogId}
+        role="dialog"
+        aria-modal="true"
+        className={`dialog-full-screen ${widgetState === WIDGET_STATE.FIXIT ? 'open' : 'hidden'}`}
+        onClose={closeDialog}
+        aria-labelledby="ufixit-dialog-title"
+        >
         <div className="flex-column h-100">
           <div className="dialog-header">
-            <h2 id="dialog-title" tabIndex="-1">{tempActiveIssue?.formLabel}</h2>
+            <h2 id="ufixit-dialog-title" tabIndex="-1">{tempActiveIssue?.formLabel}</h2>
             <CloseIcon
               onClick={closeDialog}
               onKeyDown={(e) => {
@@ -984,7 +1012,7 @@ export default function FixIssuesPage({
             </div>
           </div>
         </div>
-      </dialog>
+      </div>
     </>
   )
 }
